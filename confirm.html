@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Mở FlowMusic</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0a0a0f;
+      color: #e8e8f0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .dialog {
+      width: 100%;
+      max-width: 360px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      font-weight: 650;
+    }
+    p {
+      margin: 0;
+      color: #a0a0c0;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 18px;
+    }
+    button {
+      flex: 1;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    #cancelBtn {
+      background: #18182a;
+      color: #aaaacc;
+      border: 1px solid #28284a;
+    }
+    #openBtn {
+      background: linear-gradient(135deg, #7c3aed, #2563eb);
+    }
+  </style>
+</head>
+<body>
+  <main class="dialog">
+    <h1>Mở FlowMusic?</h1>
+    <p>FlowMusic Auto Prompt chỉ hoạt động trên flowmusic.app. Bạn có muốn mở FlowMusic ngay bây giờ không?</p>
+    <div class="actions">
+      <button id="cancelBtn" type="button">Hủy</button>
+      <button id="openBtn" type="button">Mở FlowMusic</button>
+    </div>
+  </main>
+  <script src="confirm.js"></script>
+</body>
+</html>
