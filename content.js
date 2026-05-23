@@ -106,6 +106,11 @@ const NEGATIVE_BUTTON_KEYWORDS = [
   'dung',
 ];
 
+const TRACE_CREATING_TEXT_RE = /\bcreating\b/i;
+const TRACE_THOUGHTS_TEXT_RE = /^thoughts$/i;
+const TRACE_APPEAR_TIMEOUT = 15000;
+const TRACE_CONFIRM_DELAY = 1200;
+
 // =====================
 // Message listener
 // =====================
@@ -119,6 +124,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'STOP') {
     stopRequested = true;
     running = false;
+    sendStatus({ running: false, log: '⏹ Đã dừng. Automation đã được ngắt theo yêu cầu.', logType: 'info' });
     sendResponse({ ok: true });
     return true;
   }
@@ -140,7 +146,7 @@ async function startQueue(prompts, startIndex, settings, customSelectors) {
   stopRequested = false;
 
   const waitAfterSend = (settings?.waitAfterSend || 5) * 1000;
-  const maxWait = (settings?.maxWait || 180) * 1000;
+  const maxWait = (settings?.maxWait || 300) * 1000;
 
   sendStatus({ index: startIndex, running: true, log: `🚀 Bắt đầu từ prompt #${startIndex + 1}`, logType: 'info' });
   debugLog(`Queue started: ${prompts.length} prompts, startIndex=${startIndex}`);
@@ -164,7 +170,9 @@ async function startQueue(prompts, startIndex, settings, customSelectors) {
     await sleep(300);
 
     const initialDoneCount = getDoneCount();
+    const initialThoughtsCount = getThoughtsCount();
     debugLog(`Done count before submit: ${initialDoneCount}`);
+    debugLog(`Thoughts count before submit: ${initialThoughtsCount}`);
 
     const btn = findSubmitButton(customSelectors?.submit, input);
     if (!btn) {
@@ -182,7 +190,22 @@ async function startQueue(prompts, startIndex, settings, customSelectors) {
     if (stopRequested) break;
 
     sendStatus({ index: i, running: true, log: `⏳ Đang chờ FlowMusic tạo bài ${i + 1}...`, logType: 'info' });
-    const done = await waitForGeneration(customSelectors?.loading, maxWait, i, prompts.length, initialDoneCount);
+    const traceStartedAt = Date.now();
+    const traceResult = await waitForTraceCompletion(initialThoughtsCount, maxWait, i, prompts.length);
+    let done = traceResult.completed;
+    const remainingWait = Math.max(0, maxWait - (Date.now() - traceStartedAt));
+
+    if (!done && !stopRequested && remainingWait > 0) {
+      debugLog(traceResult.usedTrace
+        ? 'Trace wait did not complete; falling back to generation detection'
+        : 'Creating trace not detected; falling back to generation detection');
+      done = await waitForGeneration(customSelectors?.loading, remainingWait, i, prompts.length, initialDoneCount);
+    }
+
+    if (stopRequested) {
+      sendStatus({ index: i, running: false, log: '⏹ Đã dừng. Automation đã được ngắt theo yêu cầu.', logType: 'info' });
+      break;
+    }
 
     if (!done) {
       sendStatus({ index: i, running: true, log: `⚠ Timeout prompt ${i + 1}, tiếp tục prompt tiếp theo.`, logType: 'error' });
@@ -203,6 +226,69 @@ async function startQueue(prompts, startIndex, settings, customSelectors) {
 // =====================
 // Wait for generation
 // =====================
+async function waitForTraceCompletion(initialThoughtsCount, maxWait, idx, total) {
+  const started = Date.now();
+  const appearDeadline = started + Math.min(TRACE_APPEAR_TIMEOUT, maxWait);
+  const deadline = started + maxWait;
+  const fallbackPoll = 2000;
+  let traceSeen = isFlowMusicCreating();
+  let completeFirstSeenAt = 0;
+  let lastStatusAt = 0;
+
+  debugLog(`Trace wait started: creating=${traceSeen}, initialThoughtsCount=${initialThoughtsCount}`);
+
+  while (Date.now() < deadline) {
+    if (stopRequested) return { completed: false, usedTrace: traceSeen };
+
+    const now = Date.now();
+    const creating = isFlowMusicCreating();
+    const thoughtsCount = getThoughtsCount();
+    const hasNewThoughts = thoughtsCount > initialThoughtsCount;
+
+    if (creating) traceSeen = true;
+
+    debugLog(`Trace check: creating=${creating}, traceSeen=${traceSeen}, thoughtsCount=${thoughtsCount}, initialThoughtsCount=${initialThoughtsCount}`);
+
+    if (!traceSeen && !creating && hasNewThoughts) {
+      debugLog('New Thoughts heading detected before active trace was observed');
+      return { completed: true, usedTrace: traceSeen };
+    }
+
+    if (!traceSeen && now >= appearDeadline) {
+      return { completed: false, usedTrace: false };
+    }
+
+    if (traceSeen && !creating && hasNewThoughts) {
+      if (!completeFirstSeenAt) {
+        completeFirstSeenAt = now;
+        debugLog('Trace completion candidate detected');
+      }
+      if (now - completeFirstSeenAt >= TRACE_CONFIRM_DELAY) {
+        debugLog('Trace completion confirmed');
+        return { completed: true, usedTrace: true };
+      }
+    } else {
+      completeFirstSeenAt = 0;
+    }
+
+    if (now - lastStatusAt >= fallbackPoll) {
+      const elapsed = Math.round((now - started) / 1000);
+      sendStatus({
+        index: idx,
+        running: true,
+        log: `Waiting for FlowMusic trace ${idx + 1}/${total}... (${elapsed}s)`,
+        logType: 'info'
+      });
+      lastStatusAt = now;
+    }
+
+    await waitForDomChange(Math.min(fallbackPoll, Math.max(0, deadline - Date.now())));
+  }
+
+  debugLog(`Trace wait timed out: traceSeen=${traceSeen}`);
+  return { completed: false, usedTrace: traceSeen };
+}
+
 async function waitForGeneration(customLoadingSelector, maxWait, idx, total, initialDoneCount) {
   const started = Date.now();
   const deadline = started + maxWait;
@@ -283,6 +369,7 @@ function waitForDomChange(timeout) {
       observer.observe(document.body || document.documentElement, {
         childList: true,
         subtree: true,
+        characterData: true,
         attributes: true,
         attributeFilter: ['class', 'style', 'disabled', 'aria-disabled', 'aria-label', 'data-testid'],
       });
@@ -464,6 +551,50 @@ function hasDisabledSubmitButton() {
     }
   }
   return false;
+}
+
+function isFlowMusicCreating() {
+  return Boolean(findCreatingTraceElement());
+}
+
+function findCreatingTraceElement() {
+  const targetedSelectors = [
+    '[class*="progress-trace-header"]',
+    '[class*="text-progress-trace-active"]',
+  ];
+
+  for (const sel of targetedSelectors) {
+    try {
+      for (const el of document.querySelectorAll(sel)) {
+        if (isVisible(el) && TRACE_CREATING_TEXT_RE.test(normalizedText(el))) return el;
+      }
+    } catch (e) {}
+  }
+
+  try {
+    for (const el of document.querySelectorAll('div, span, p, button, [role="heading"]')) {
+      const text = normalizedText(el);
+      if (text.length <= 180 && TRACE_CREATING_TEXT_RE.test(text) && isVisible(el)) return el;
+    }
+  } catch (e) {}
+
+  return null;
+}
+
+function getThoughtsCount() {
+  const elements = new Set();
+  try {
+    for (const el of document.querySelectorAll('div, span, p, button, [role="heading"]')) {
+      if (!isVisible(el) || !TRACE_THOUGHTS_TEXT_RE.test(normalizedText(el))) continue;
+      const hasExactThoughtsChild = Array.from(el.children).some(child => TRACE_THOUGHTS_TEXT_RE.test(normalizedText(child)));
+      if (!hasExactThoughtsChild) elements.add(el);
+    }
+  } catch (e) {}
+  return elements.size;
+}
+
+function normalizedText(el) {
+  return (el?.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
 function getDoneCount() {

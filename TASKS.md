@@ -198,3 +198,14 @@ For a quick stable update, complete:
 - Task 4
 - Task 5
 
+## 2026-05-23 Requested Updates
+
+- [x] Remove advanced settings UI from the extension popup.
+- [x] Set max music generation wait default to 5 minutes.
+- [x] Keep the extension panel scoped to FlowMusic tabs only.
+- [x] Show a stopped message when the user presses Stop instead of the timeout/continue message.
+- [x] Improve debug log formatting in the popup.
+- [x] Show a browser confirm to open FlowMusic when clicking the extension from another tab.
+- [x] Fix FlowMusic tab opening after disabling automatic side-panel action behavior.
+- [x] Open the extension panel automatically after accepting the FlowMusic confirm from another tab.
+- [x] Preserve side-panel user gesture by opening from the confirm window button click.

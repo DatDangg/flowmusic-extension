@@ -54,3 +54,22 @@ Updated: 2026-05-23
 - `node --check content.js`
 - `manifest.json` parsed successfully as JSON.
 - Mojibake scan found no broken encoding in extension source files; only normal Vietnamese/emoji characters remain.
+
+## 2026-05-23 Requested Updates
+
+- Removed the advanced settings section from `popup.html` and removed popup handlers that depended on those controls.
+- Changed the max music generation wait default from 180 seconds to 300 seconds in `popup.html`, `popup.js`, and `content.js`.
+- Kept the side panel enabled only on FlowMusic tabs in `background.js`.
+- Disabled automatic side-panel opening on action click, so clicking the extension from another tab shows the FlowMusic confirm instead of opening the popup there.
+- Fixed FlowMusic tab opening by calling `chrome.sidePanel.open()` directly from the extension click path without awaiting side-panel option setup first.
+- After the user accepts the FlowMusic confirm from another tab, the extension now creates the FlowMusic tab and immediately opens the side panel there.
+- Moved the FlowMusic tab creation and side-panel open call into `confirm.js` so the confirm window button click preserves the user gesture required by Chrome.
+- Updated Stop handling in `popup.js` and `content.js` so stopping reports `Đã dừng` and does not fall through to the timeout/continue message.
+- Reformatted popup debug logs into timestamped rows with better spacing, wrapping, and empty-state text.
+
+Verification:
+
+- `node --check popup.js`
+- `node --check content.js`
+- `node --check background.js`
+- `manifest.json` parsed successfully as JSON.

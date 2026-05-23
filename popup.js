@@ -19,26 +19,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function loadSavedState() {
-  const data = await chrome.storage.local.get(['prompts', 'currentIndex', 'selectors', 'settings', 'runState', 'debugLogs']);
+  const data = await chrome.storage.local.get(['prompts', 'currentIndex', 'settings', 'runState', 'debugLogs']);
   if (data.prompts) {
     prompts = data.prompts;
     renderPromptList(data.currentIndex || 0);
     updateCount();
     updateStartButtons();
   }
-  if (data.selectors) {
-    $('inputSelector').value = data.selectors.input || '';
-    $('submitSelector').value = data.selectors.submit || '';
-    $('loadingSelector').value = data.selectors.loading || '';
-  }
   if (data.settings) {
     $('waitAfterSend').value = data.settings.waitAfterSend || 5;
-    $('maxWait').value = data.settings.maxWait || 180;
+    $('maxWait').value = data.settings.maxWait || 300;
     $('debugMode').checked = Boolean(data.settings.debug);
   }
-  if (Array.isArray(data.debugLogs) && data.debugLogs.length > 0) {
-    renderDebugLogs(data.debugLogs);
-  }
+  renderDebugLogs(Array.isArray(data.debugLogs) ? data.debugLogs : []);
   if (data.runState?.running) {
     isRunning = true;
     setRunningUI(true);
@@ -71,20 +64,8 @@ function bindEvents() {
   $('resetProgressBtn').addEventListener('click', resetProgress);
   $('stopBtn').addEventListener('click', stopAutomation);
   $('clearBtn').addEventListener('click', clearAll);
-  $('detectBtn').addEventListener('click', detectSelectors);
   $('debugMode').addEventListener('change', saveSettingsOnly);
   $('clearDebugBtn').addEventListener('click', clearDebugLogs);
-
-  $('advancedToggle').addEventListener('click', () => {
-    $('advancedSection').classList.toggle('open');
-    $('advancedToggle').textContent = $('advancedSection').classList.contains('open')
-      ? '⚙ Cài đặt nâng cao ▴'
-      : '⚙ Cài đặt nâng cao ▾';
-  });
-
-  ['inputSelector', 'submitSelector', 'loadingSelector'].forEach(id => {
-    $(id).addEventListener('change', saveSelectors);
-  });
 
   chrome.runtime.onMessage.addListener(handleContentMessage);
 }
@@ -243,14 +224,10 @@ async function startAutomation({ mode }) {
 
   const settings = {
     waitAfterSend: parseInt($('waitAfterSend').value, 10) || 5,
-    maxWait: parseInt($('maxWait').value, 10) || 180,
+    maxWait: parseInt($('maxWait').value, 10) || 300,
     debug: $('debugMode').checked,
   };
-  const selectors = {
-    input: $('inputSelector').value.trim() || null,
-    submit: $('submitSelector').value.trim() || null,
-    loading: $('loadingSelector').value.trim() || null,
-  };
+  const selectors = { input: null, submit: null, loading: null };
 
   await chrome.storage.local.set({ settings, selectors });
   await saveRunState(true, startIndex, { resetStartedAt: true });
@@ -279,14 +256,14 @@ async function startAutomation({ mode }) {
 }
 
 async function stopAutomation() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await findFlowMusicTab();
   if (tab) {
     await sendTabMessage(tab.id, { action: 'STOP' }, 'Không gửi được lệnh dừng. Content script có thể chưa sẵn sàng.');
   }
   isRunning = false;
   await saveRunState(false);
   setRunningUI(false);
-  setLog('⏹ Đã dừng lại.', 'error');
+  setLog('⏹ Đã dừng. Automation đã được ngắt theo yêu cầu.', 'info');
   $('dotPulse').style.display = 'none';
 }
 
@@ -313,22 +290,6 @@ async function clearAll() {
 }
 
 // =====================
-// Detect selectors
-// =====================
-async function detectSelectors() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!isFlowMusicUrl(tab?.url)) {
-    setLog('❌ Mở flowmusic.app trước rồi thử lại.', 'error');
-    $('statusBar').classList.add('visible');
-    return;
-  }
-  await saveSettingsOnly();
-  setLog('🔍 Đang detect selectors...', 'info');
-  $('statusBar').classList.add('visible');
-  await sendTabMessage(tab.id, { action: 'DETECT', debug: $('debugMode').checked }, 'Không detect được selectors. Hãy tải lại tab FlowMusic rồi thử lại.');
-}
-
-// =====================
 // Message handler
 // =====================
 function handleContentMessage(msg) {
@@ -352,19 +313,6 @@ function handleContentMessage(msg) {
   }
   if (msg.type === 'DEBUG') {
     appendDebugLogs([msg.message]);
-  }
-  if (msg.type === 'DETECT_RESULT') {
-    if (msg.selectors) {
-      if (msg.selectors.input) $('inputSelector').value = msg.selectors.input;
-      if (msg.selectors.submit) $('submitSelector').value = msg.selectors.submit;
-      if (msg.selectors.loading) $('loadingSelector').value = msg.selectors.loading;
-      setLog('✅ Detect xong. Kiểm tra lại selector nếu cần.', 'success');
-      $('advancedSection').classList.add('open');
-      $('advancedToggle').textContent = '⚙ Cài đặt nâng cao ▴';
-      saveSelectors();
-    } else {
-      setLog('⚠ Không tìm thấy selectors. Nhập thủ công.', 'error');
-    }
   }
   if (msg.type === 'DONE') {
     isRunning = false;
@@ -418,21 +366,11 @@ function updateProgress(current, total) {
   $('progressFill').style.width = pct + '%';
 }
 
-function saveSelectors() {
-  chrome.storage.local.set({
-    selectors: {
-      input: $('inputSelector').value.trim() || null,
-      submit: $('submitSelector').value.trim() || null,
-      loading: $('loadingSelector').value.trim() || null,
-    }
-  });
-}
-
 async function saveSettingsOnly() {
   return chrome.storage.local.set({
     settings: {
       waitAfterSend: parseInt($('waitAfterSend').value, 10) || 5,
-      maxWait: parseInt($('maxWait').value, 10) || 180,
+      maxWait: parseInt($('maxWait').value, 10) || 300,
       debug: $('debugMode').checked,
     }
   });
@@ -469,7 +407,10 @@ function sendTabMessage(tabId, message, userErrorMessage) {
 }
 
 async function appendDebugLogs(messages) {
-  const stamped = messages.map(message => `[${new Date().toLocaleTimeString()}] ${message}`);
+  const stamped = messages.map(message => ({
+    time: new Date().toLocaleTimeString('vi-VN', { hour12: false }),
+    message: String(message),
+  }));
   const data = await chrome.storage.local.get('debugLogs');
   const logs = [...(data.debugLogs || []), ...stamped].slice(-80);
   await chrome.storage.local.set({ debugLogs: logs });
@@ -477,7 +418,19 @@ async function appendDebugLogs(messages) {
 }
 
 function renderDebugLogs(logs) {
-  $('debugLog').textContent = logs.slice(-12).join('\n');
+  const el = $('debugLog');
+  const recentLogs = logs.slice(-20).map(normalizeDebugLog);
+  if (recentLogs.length === 0) {
+    el.innerHTML = '<div class="debug-empty">Chưa có debug log.</div>';
+    return;
+  }
+  el.innerHTML = recentLogs.map(log => `
+    <div class="debug-line">
+      <span class="debug-time">${escHtml(log.time)}</span>
+      <span class="debug-message">${escHtml(log.message)}</span>
+    </div>
+  `).join('');
+  el.scrollTop = el.scrollHeight;
 }
 
 async function clearDebugLogs() {
@@ -492,6 +445,29 @@ function escHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function normalizeDebugLog(log) {
+  if (log && typeof log === 'object') {
+    return {
+      time: log.time || '--:--:--',
+      message: log.message || '',
+    };
+  }
+  const text = String(log || '');
+  const match = text.match(/^\[([^\]]+)\]\s*(.*)$/);
+  return {
+    time: match?.[1] || '--:--:--',
+    message: match?.[2] || text,
+  };
+}
+
+async function findFlowMusicTab() {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (isFlowMusicUrl(activeTab?.url)) return activeTab;
+
+  const tabs = await chrome.tabs.query({});
+  return tabs.find(tab => isFlowMusicUrl(tab.url)) || null;
 }
 
 function isFlowMusicUrl(url) {
