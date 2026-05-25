@@ -44,6 +44,18 @@ const SUBMIT_SELECTORS = [
   'button[type="submit"]',
 ];
 
+const CANCEL_SELECTORS = [
+  'button[aria-label*="cancel" i]',
+  'button[aria-label*="stop" i]',
+  'button[aria-label*="abort" i]',
+  'button[title*="cancel" i]',
+  'button[title*="stop" i]',
+  'button[title*="abort" i]',
+  'button[data-testid*="cancel" i]',
+  'button[data-testid*="stop" i]',
+  'button[data-testid*="abort" i]',
+];
+
 const LOADING_SELECTORS = [
   '[aria-label*="loading" i]',
   '[aria-label*="generating" i]',
@@ -106,10 +118,34 @@ const NEGATIVE_BUTTON_KEYWORDS = [
   'dung',
 ];
 
+const CANCEL_BUTTON_KEYWORDS = [
+  'cancel',
+  'stop',
+  'abort',
+  'dừng',
+  'dung',
+  'hủy',
+  'huy',
+];
+
+const CANCEL_NEGATIVE_BUTTON_KEYWORDS = [
+  'play',
+  'pause',
+  'download',
+  'share',
+  'copy',
+  'delete',
+  'remove',
+  'clear',
+  'xóa',
+  'xoa',
+];
+
 const TRACE_CREATING_TEXT_RE = /\bcreating\b/i;
 const TRACE_THOUGHTS_TEXT_RE = /^thoughts$/i;
 const TRACE_APPEAR_TIMEOUT = 15000;
 const TRACE_CONFIRM_DELAY = 1200;
+const TIMEOUT_CANCEL_WAIT = 30000;
 
 // =====================
 // Message listener
@@ -122,9 +158,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.action === 'STOP') {
+    debugLog(`Stop requested from ${msg.source || 'unknown source'}`);
     stopRequested = true;
     running = false;
-    sendStatus({ running: false, log: '⏹ Đã dừng. Automation đã được ngắt theo yêu cầu.', logType: 'info' });
+    sendStatus({ running: false, log: '⏹ Đã dừng do nút Dừng trong extension.', logType: 'info' });
     sendResponse({ ok: true });
     return true;
   }
@@ -155,6 +192,20 @@ async function startQueue(prompts, startIndex, settings, customSelectors) {
     if (stopRequested) break;
 
     const prompt = prompts[i];
+    const readyBeforePrompt = await waitForPromptEntryReady(customSelectors, 15000);
+    if (stopRequested) break;
+
+    if (!readyBeforePrompt) {
+      sendStatus({ index: i, running: true, log: `⚠ FlowMusic chưa sẵn sàng cho prompt ${i + 1}. Đang thử dừng tác vụ còn chạy...`, logType: 'error' });
+      const readyAfterStop = await stopActiveGeneration(customSelectors, i, prompts.length);
+      if (stopRequested) break;
+      if (!readyAfterStop) {
+        sendStatus({ index: i, running: false, log: `❌ Không dừng được tác vụ đang chạy. Đã ngắt để tránh ghi prompt mới khi FlowMusic chưa gửi được.`, logType: 'error' });
+        running = false;
+        return;
+      }
+    }
+
     sendStatus({ index: i, running: true, log: `✍ Đang nhập prompt ${i + 1}/${prompts.length}...`, logType: 'info' });
 
     const input = findElement(customSelectors?.input, INPUT_SELECTORS, 'input');
@@ -192,23 +243,29 @@ async function startQueue(prompts, startIndex, settings, customSelectors) {
     sendStatus({ index: i, running: true, log: `⏳ Đang chờ FlowMusic tạo bài ${i + 1}...`, logType: 'info' });
     const traceStartedAt = Date.now();
     const traceResult = await waitForTraceCompletion(initialThoughtsCount, maxWait, i, prompts.length);
-    let done = traceResult.completed;
+    let done = false;
     const remainingWait = Math.max(0, maxWait - (Date.now() - traceStartedAt));
 
-    if (!done && !stopRequested && remainingWait > 0) {
+    if (!stopRequested && remainingWait > 0) {
       debugLog(traceResult.usedTrace
-        ? 'Trace wait did not complete; falling back to generation detection'
+        ? `Trace wait ${traceResult.completed ? 'completed' : 'did not complete'}; waiting for generation result`
         : 'Creating trace not detected; falling back to generation detection');
       done = await waitForGeneration(customSelectors?.loading, remainingWait, i, prompts.length, initialDoneCount);
     }
 
     if (stopRequested) {
-      sendStatus({ index: i, running: false, log: '⏹ Đã dừng. Automation đã được ngắt theo yêu cầu.', logType: 'info' });
+      sendStatus({ index: i, running: false, log: '⏹ Đã dừng do nút Dừng trong extension.', logType: 'info' });
       break;
     }
 
     if (!done) {
-      sendStatus({ index: i, running: true, log: `⚠ Timeout prompt ${i + 1}, tiếp tục prompt tiếp theo.`, logType: 'error' });
+      sendStatus({ index: i, running: true, log: `⚠ Timeout prompt ${i + 1}. Đang hủy prompt này trước khi chạy prompt tiếp theo...`, logType: 'error' });
+      const cancelled = await cancelTimedOutPrompt(customSelectors, i, prompts.length);
+      if (!cancelled) {
+        sendStatus({ index: i, running: false, log: `❌ Không xác nhận được FlowMusic đã dừng prompt ${i + 1}. Đã ngắt để tránh ghi prompt mới khi chưa gửi được.`, logType: 'error' });
+        running = false;
+        return;
+      }
     } else {
       sendStatus({ index: i + 1, running: true, log: `✅ Bài ${i + 1} xong. Chuẩn bị prompt tiếp theo...`, logType: 'success' });
     }
@@ -349,6 +406,76 @@ async function waitForGeneration(customLoadingSelector, maxWait, idx, total, ini
   return false;
 }
 
+async function cancelTimedOutPrompt(customSelectors, idx, total) {
+  return stopActiveGeneration(customSelectors, idx, total);
+}
+
+async function stopActiveGeneration(customSelectors, idx, total) {
+  const cancelButton = findCancelButton();
+  if (cancelButton) {
+    debugLog(`Cancel/stop button found: ${describeElement(cancelButton)}`);
+    cancelButton.click();
+    sendStatus({
+      index: idx,
+      running: true,
+      log: `⏹ Đã gửi lệnh dừng prompt ${idx + 1}/${total}. Chờ FlowMusic sẵn sàng lại...`,
+      logType: 'info'
+    });
+  } else {
+    debugLog('Cancel button not found after timeout');
+    sendStatus({
+      index: idx,
+      running: true,
+      log: `⚠ Không tìm thấy nút dừng prompt ${idx + 1}/${total}. Đang chờ giao diện sẵn sàng lại...`,
+      logType: 'error'
+    });
+  }
+
+  const ready = await waitForPromptEntryReady(customSelectors, TIMEOUT_CANCEL_WAIT);
+  if (ready) {
+    sendStatus({
+      index: idx + 1,
+      running: true,
+      log: `✅ Đã bỏ prompt ${idx + 1}. Chuẩn bị prompt tiếp theo...`,
+      logType: 'info'
+    });
+    return true;
+  } else {
+    sendStatus({
+      index: idx + 1,
+      running: true,
+      log: `⚠ Prompt ${idx + 1} đã timeout nhưng FlowMusic chưa báo sẵn sàng. Sẽ không gửi prompt tiếp theo.`,
+      logType: 'error'
+    });
+    return false;
+  }
+}
+
+async function waitForPromptEntryReady(customSelectors, maxWait) {
+  const started = Date.now();
+  const deadline = started + maxWait;
+  const poll = 1000;
+
+  while (Date.now() < deadline) {
+    if (stopRequested) return false;
+    if (isPromptEntryReady(customSelectors)) return true;
+    await waitForDomChange(Math.min(poll, Math.max(0, deadline - Date.now())));
+  }
+
+  return isPromptEntryReady(customSelectors);
+}
+
+function isPromptEntryReady(customSelectors) {
+  if (isFlowMusicCreating() || isLoading(customSelectors?.loading)) return false;
+  if (hasVisibleCancelControl()) return false;
+
+  const input = findElement(customSelectors?.input, INPUT_SELECTORS, 'input');
+  if (!input || isInputDisabled(input)) return false;
+
+  const button = findSubmitButton(customSelectors?.submit, input);
+  return Boolean(button) || !hasDisabledSubmitButton();
+}
+
 function waitForDomChange(timeout) {
   return new Promise(resolve => {
     let done = false;
@@ -456,6 +583,69 @@ function collectSubmitCandidates(inputEl) {
   return Array.from(buttons);
 }
 
+function findCancelButton() {
+  const candidates = collectCancelCandidates()
+    .filter(button => isUsableButton(button))
+    .map(button => ({ button, score: scoreCancelButton(button) }))
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  debugLog(`Cancel candidates: ${candidates.slice(0, 5).map(item => `${Math.round(item.score)}:${getButtonLabel(item.button).slice(0, 40)}`).join(' | ') || 'none'}`);
+  return candidates[0]?.button || null;
+}
+
+function hasVisibleCancelControl() {
+  return collectCancelCandidates()
+    .some(button => isUsableButton(button) && scoreCancelButton(button) > 0);
+}
+
+function collectCancelCandidates() {
+  const buttons = new Set();
+
+  for (const sel of CANCEL_SELECTORS) {
+    try {
+      document.querySelectorAll(sel).forEach(el => {
+        const button = normalizeButton(el);
+        if (button) buttons.add(button);
+      });
+    } catch (e) {}
+  }
+
+  try {
+    document.querySelectorAll('button').forEach(button => {
+      const label = getButtonLabel(button);
+      if (hasAnyKeyword(label, CANCEL_BUTTON_KEYWORDS)) buttons.add(button);
+    });
+  } catch (e) {}
+
+  const creatingEl = findCreatingTraceElement();
+  if (creatingEl) {
+    [
+      creatingEl.closest('section'),
+      creatingEl.closest('[role="dialog"]'),
+      creatingEl.parentElement,
+      creatingEl.parentElement?.parentElement,
+      creatingEl.parentElement?.parentElement?.parentElement,
+    ].filter(Boolean).forEach(scope => {
+      scope.querySelectorAll('button').forEach(button => buttons.add(button));
+    });
+  }
+
+  return Array.from(buttons);
+}
+
+function scoreCancelButton(button) {
+  const label = getButtonLabel(button);
+  let score = 0;
+
+  if (hasAnyKeyword(label, CANCEL_BUTTON_KEYWORDS)) score += 60;
+  if (button.querySelector('[class*="stop" i], [class*="cancel" i], [data-testid*="stop" i], [data-testid*="cancel" i]')) score += 20;
+  if (isFlowMusicCreating() || isLoading(null)) score += 20;
+  if (hasAnyKeyword(label, CANCEL_NEGATIVE_BUTTON_KEYWORDS)) score -= 80;
+
+  return score;
+}
+
 function normalizeButton(el) {
   if (!el) return null;
   return el.tagName?.toLowerCase() === 'button' ? el : el.closest?.('button');
@@ -551,6 +741,12 @@ function hasDisabledSubmitButton() {
     }
   }
   return false;
+}
+
+function isInputDisabled(input) {
+  return Boolean(input.disabled)
+    || input.getAttribute('aria-disabled') === 'true'
+    || input.getAttribute('readonly') !== null;
 }
 
 function isFlowMusicCreating() {

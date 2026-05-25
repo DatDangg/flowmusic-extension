@@ -37,6 +37,26 @@
     .header h1 { font-size: 15px; font-weight: 600; color: #fff; line-height: 1.2; }
     .header p { font-size: 11px; color: #8888aa; margin-top: 1px; }
     .body { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+    .page-warning {
+      display: none;
+      min-height: calc(100vh - 72px);
+      padding: 28px 20px;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .page-warning.visible { display: flex; }
+    .page-warning-inner {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      align-items: center;
+      max-width: 280px;
+    }
+    .page-warning-icon { font-size: 34px; }
+    .page-warning-title { color: #fff; font-size: 15px; font-weight: 700; }
+    .page-warning-text { color: #9999bb; font-size: 12px; line-height: 1.45; }
+    .page-warning .btn { width: 100%; flex: 0 0 auto; }
 
     .upload-zone {
       border: 1.5px dashed #333355;
@@ -164,24 +184,42 @@
     .dot-pulse span:nth-child(3) { animation-delay: 0.4s; }
     @keyframes pulse { 0%,80%,100%{opacity:0.2;transform:scale(0.8)} 40%{opacity:1;transform:scale(1)} }
 
-    .debug-box { padding: 8px 10px; }
-    .debug-log { margin-top: 6px; max-height: 140px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
-    .debug-empty { color: #555577; font-size: 11px; text-align: center; padding: 8px 0; }
-    .debug-line {
-      display: grid;
-      grid-template-columns: 58px 1fr;
+    .debug-box { padding: 10px; }
+    .debug-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       gap: 8px;
-      padding: 5px 6px;
-      border: 1px solid #1e1e3a;
-      border-radius: 6px;
-      background: #0b0b14;
-      color: #aaaacc;
-      font-family: Consolas, monospace;
-      font-size: 10px;
-      line-height: 1.35;
+      margin-bottom: 8px;
     }
-    .debug-time { color: #7777aa; font-variant-numeric: tabular-nums; }
-    .debug-message { min-width: 0; overflow-wrap: anywhere; }
+    .debug-title {
+      color: #c4b5fd;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .debug-header .btn { flex: 0 0 auto; padding: 6px 9px; }
+    .debug-log {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid #ffffff14;
+      border-radius: 8px;
+      padding: 10px;
+      min-height: 84px;
+      max-height: 160px;
+      overflow-y: auto;
+      color: #d8d8e8;
+      font-family: Consolas, 'Segoe UI', monospace;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .debug-empty { color: #666688; text-align: center; padding: 20px 0; }
+    .debug-line {
+      padding: 2px 0;
+      overflow-wrap: anywhere;
+    }
+    .debug-time { color: #9aa0a6; margin-right: 5px; font-variant-numeric: tabular-nums; }
+    .debug-icon { margin-right: 5px; }
   </style>
 </head>
 <body>
@@ -194,7 +232,16 @@
   </div>
 </div>
 
-<div class="body">
+<div class="page-warning" id="wrongPage">
+  <div class="page-warning-inner">
+    <div class="page-warning-icon">⚠</div>
+    <div class="page-warning-title">Không phải tab FlowMusic</div>
+    <div class="page-warning-text">Extension chỉ điều khiển khi bạn đang ở tab flowmusic.app. Panel vẫn sẽ giữ mở khi bạn chuyển tab.</div>
+    <button class="btn btn-primary" id="openFlowMusicBtn">Mở FlowMusic</button>
+  </div>
+</div>
+
+<div class="body" id="appBody">
   <div class="upload-zone" id="uploadZone">
     <input type="file" id="fileInput" accept=".txt">
     <div class="icon">📂</div>
@@ -239,7 +286,7 @@
   </div>
 
   <div class="btn-row">
-    <button class="btn btn-primary" id="startBtn" disabled>▶ Tiếp tục</button>
+    <button class="btn btn-primary" id="startBtn" disabled>▶ Bắt đầu</button>
     <button class="btn btn-primary" id="restartBtn" disabled>↺ Chạy lại</button>
     <button class="btn btn-danger" id="stopBtn" disabled>■ Dừng</button>
   </div>
@@ -250,8 +297,9 @@
   </div>
 
   <div class="debug-box">
-    <div class="btn-row">
-      <button class="btn btn-ghost btn-small" id="clearDebugBtn">Xóa debug log</button>
+    <div class="debug-header">
+      <span class="debug-title">Log</span>
+      <button class="btn btn-ghost btn-small" id="clearDebugBtn">Xóa</button>
     </div>
     <div class="debug-log" id="debugLog"></div>
   </div>

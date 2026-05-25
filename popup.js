@@ -4,6 +4,8 @@
 let prompts = [];
 let isRunning = false;
 let pendingWarnings = [];
+let currentIndex = 0;
+let isFlowMusicPage = false;
 
 const MAX_PROMPT_WARNING = 100;
 const LONG_PROMPT_WARNING = 1200;
@@ -16,13 +18,15 @@ const $ = (id) => document.getElementById(id);
 document.addEventListener('DOMContentLoaded', async () => {
   await loadSavedState();
   bindEvents();
+  await checkActivePage();
 });
 
 async function loadSavedState() {
   const data = await chrome.storage.local.get(['prompts', 'currentIndex', 'settings', 'runState', 'debugLogs']);
+  currentIndex = Number.isInteger(data.currentIndex) ? data.currentIndex : 0;
   if (data.prompts) {
     prompts = data.prompts;
-    renderPromptList(data.currentIndex || 0);
+    renderPromptList(currentIndex);
     updateCount();
     updateStartButtons();
   }
@@ -34,8 +38,9 @@ async function loadSavedState() {
   renderDebugLogs(Array.isArray(data.debugLogs) ? data.debugLogs : []);
   if (data.runState?.running) {
     isRunning = true;
+    currentIndex = data.runState.currentIndex ?? currentIndex;
     setRunningUI(true);
-    renderPromptList(data.runState.currentIndex);
+    renderPromptList(currentIndex);
     refreshStatusFromStorage();
   }
 }
@@ -66,8 +71,46 @@ function bindEvents() {
   $('clearBtn').addEventListener('click', clearAll);
   $('debugMode').addEventListener('change', saveSettingsOnly);
   $('clearDebugBtn').addEventListener('click', clearDebugLogs);
+  $('openFlowMusicBtn').addEventListener('click', openFlowMusicTab);
 
   chrome.runtime.onMessage.addListener(handleContentMessage);
+  chrome.tabs.onActivated.addListener(() => {
+    checkActivePage();
+  });
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+    if (changeInfo.status || changeInfo.url) checkActivePage();
+  });
+}
+
+async function checkActivePage() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+  isFlowMusicPage = isFlowMusicUrl(tab?.url);
+
+  $('wrongPage').classList.toggle('visible', !isFlowMusicPage);
+  $('appBody').style.display = isFlowMusicPage ? 'flex' : 'none';
+  updateStartButtons();
+}
+
+async function openFlowMusicTab() {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+  const currentWindowId = activeTab?.windowId;
+  const tabs = await chrome.tabs.query({}).catch(() => []);
+  const existing = tabs.find(tab => tab.windowId === currentWindowId && isFlowMusicUrl(tab.url))
+    || tabs.find(tab => isFlowMusicUrl(tab.url));
+
+  if (existing?.id) {
+    await chrome.tabs.update(existing.id, { active: true }).catch(() => {});
+    if (existing.windowId) {
+      await chrome.windows.update(existing.windowId, { focused: true }).catch(() => {});
+    }
+    return;
+  }
+
+  await chrome.tabs.create({
+    url: 'https://www.flowmusic.app/',
+    active: true,
+    ...(currentWindowId ? { windowId: currentWindowId } : {}),
+  }).catch(() => {});
 }
 
 // =====================
@@ -95,6 +138,7 @@ function readFile(file) {
 
     prompts = validation.prompts;
     pendingWarnings = validation.warnings;
+    currentIndex = 0;
     await chrome.storage.local.set({ prompts, currentIndex: 0 });
     await saveRunState(false, 0);
     renderPromptList(0);
@@ -210,6 +254,7 @@ async function startAutomation({ mode }) {
 
   const currentData = await chrome.storage.local.get('currentIndex');
   const startIndex = mode === 'restart' ? 0 : Math.min(currentData.currentIndex || 0, Math.max(prompts.length - 1, 0));
+  currentIndex = startIndex;
 
   if (pendingWarnings.length > 0 && !confirm(`File prompt có cảnh báo:\n\n${pendingWarnings.join('\n')}\n\nBạn vẫn muốn bắt đầu?`)) {
     setLog('⚠ Đã hủy chạy để kiểm tra lại file prompt.', 'info');
@@ -217,6 +262,7 @@ async function startAutomation({ mode }) {
   }
 
   if (mode === 'restart') {
+    currentIndex = 0;
     await chrome.storage.local.set({ currentIndex: 0 });
     renderPromptList(0);
     updateProgress(0, prompts.length);
@@ -258,20 +304,22 @@ async function startAutomation({ mode }) {
 async function stopAutomation() {
   const tab = await findFlowMusicTab();
   if (tab) {
-    await sendTabMessage(tab.id, { action: 'STOP' }, 'Không gửi được lệnh dừng. Content script có thể chưa sẵn sàng.');
+    await sendTabMessage(tab.id, { action: 'STOP', source: 'popup-stop-button' }, 'Không gửi được lệnh dừng. Content script có thể chưa sẵn sàng.');
   }
   isRunning = false;
   await saveRunState(false);
   setRunningUI(false);
-  setLog('⏹ Đã dừng. Automation đã được ngắt theo yêu cầu.', 'info');
+  setLog('⏹ Đã dừng do nút Dừng trong extension.', 'info');
   $('dotPulse').style.display = 'none';
 }
 
 async function resetProgress() {
+  currentIndex = 0;
   await chrome.storage.local.set({ currentIndex: 0 });
   await saveRunState(false, 0);
   renderPromptList(0);
   updateProgress(0, prompts.length);
+  updateStartButtons();
   setStatus(prompts.length ? `Prompt 1/${prompts.length}` : 'Chưa có prompt', false);
   setLog('↺ Đã reset tiến độ về prompt đầu tiên.', 'info');
   $('statusBar').classList.add('visible');
@@ -280,6 +328,7 @@ async function resetProgress() {
 async function clearAll() {
   prompts = [];
   pendingWarnings = [];
+  currentIndex = 0;
   await chrome.storage.local.set({ prompts: [], currentIndex: 0 });
   await saveRunState(false, 0);
   renderPromptList(0);
@@ -296,6 +345,7 @@ function handleContentMessage(msg) {
   if (msg.type === 'STATUS') {
     $('statusBar').classList.add('visible');
     if (msg.index !== undefined) {
+      currentIndex = msg.index;
       renderPromptList(msg.index);
       chrome.storage.local.set({ currentIndex: msg.index });
       saveRunState(msg.running !== false, msg.index);
@@ -321,6 +371,7 @@ function handleContentMessage(msg) {
     updateProgress(prompts.length, prompts.length);
     renderPromptList(prompts.length);
     setLog(`🎉 Hoàn tất. Đã xử lý ${prompts.length} prompt.`, 'success');
+    currentIndex = 0;
     chrome.storage.local.set({ currentIndex: 0 });
     saveRunState(false, 0);
   }
@@ -329,6 +380,7 @@ function handleContentMessage(msg) {
 function refreshStatusFromStorage() {
   chrome.storage.local.get(['runState', 'currentIndex'], (data) => {
     const idx = data.runState?.currentIndex ?? data.currentIndex ?? 0;
+    currentIndex = idx;
     renderPromptList(idx);
     setStatus(`Prompt ${idx + 1}/${prompts.length}`, true);
     updateProgress(idx, prompts.length);
@@ -339,8 +391,9 @@ function refreshStatusFromStorage() {
 // UI helpers
 // =====================
 function setRunningUI(running) {
-  $('startBtn').disabled = running || prompts.length === 0;
-  $('restartBtn').disabled = running || prompts.length === 0;
+  updateStartButtonLabel();
+  $('startBtn').disabled = !isFlowMusicPage || running || prompts.length === 0;
+  $('restartBtn').disabled = !isFlowMusicPage || running || prompts.length === 0;
   $('resetProgressBtn').disabled = running || prompts.length === 0;
   $('stopBtn').disabled = !running;
   $('dotPulse').style.display = running ? 'inline-flex' : 'none';
@@ -348,6 +401,10 @@ function setRunningUI(running) {
 
 function updateStartButtons() {
   setRunningUI(isRunning);
+}
+
+function updateStartButtonLabel() {
+  $('startBtn').textContent = currentIndex > 0 ? '▶ Tiếp tục' : '▶ Bắt đầu';
 }
 
 function setStatus(text, running) {
@@ -409,6 +466,7 @@ function sendTabMessage(tabId, message, userErrorMessage) {
 async function appendDebugLogs(messages) {
   const stamped = messages.map(message => ({
     time: new Date().toLocaleTimeString('vi-VN', { hour12: false }),
+    level: inferLogLevel(message),
     message: String(message),
   }));
   const data = await chrome.storage.local.get('debugLogs');
@@ -421,13 +479,14 @@ function renderDebugLogs(logs) {
   const el = $('debugLog');
   const recentLogs = logs.slice(-20).map(normalizeDebugLog);
   if (recentLogs.length === 0) {
-    el.innerHTML = '<div class="debug-empty">Chưa có debug log.</div>';
+    el.innerHTML = '<div class="debug-empty">Chưa có log.</div>';
     return;
   }
   el.innerHTML = recentLogs.map(log => `
     <div class="debug-line">
       <span class="debug-time">${escHtml(log.time)}</span>
-      <span class="debug-message">${escHtml(log.message)}</span>
+      <span class="debug-icon">${getLogIcon(log.level)}</span>
+      ${escHtml(log.message)}
     </div>
   `).join('');
   el.scrollTop = el.scrollHeight;
@@ -449,17 +508,48 @@ function escHtml(str) {
 
 function normalizeDebugLog(log) {
   if (log && typeof log === 'object') {
+    const message = log.message || '';
     return {
       time: log.time || '--:--:--',
-      message: log.message || '',
+      level: log.level || inferLogLevel(message),
+      message,
     };
   }
   const text = String(log || '');
   const match = text.match(/^\[([^\]]+)\]\s*(.*)$/);
+  const message = match?.[2] || text;
   return {
     time: match?.[1] || '--:--:--',
-    message: match?.[2] || text,
+    level: inferLogLevel(message),
+    message,
   };
+}
+
+function inferLogLevel(message) {
+  const text = String(message || '').toLowerCase();
+  if (/[❌🔴⛔]/.test(text) || text.includes('error') || text.includes('timeout') || text.includes('không ')) {
+    return 'error';
+  }
+  if (/[⚠🟡]/.test(text) || text.includes('warn') || text.includes('fallback')) {
+    return 'warn';
+  }
+  if (/[✅🟢🎉]/.test(text) || text.includes('done') || text.includes('complete') || text.includes('xong')) {
+    return 'success';
+  }
+  if (text.includes('queue') || text.includes('started') || text.includes('detected')) {
+    return 'system';
+  }
+  return 'info';
+}
+
+function getLogIcon(level) {
+  return {
+    system: '🔵',
+    success: '🟢',
+    warn: '🟡',
+    error: '🔴',
+    info: '⚪',
+  }[level] || '⚪';
 }
 
 async function findFlowMusicTab() {
