@@ -5,12 +5,28 @@ initializeSidePanel();
 
 chrome.runtime.onInstalled.addListener(initializeSidePanel);
 
-chrome.runtime.onStartup.addListener(initializeSidePanel);
+chrome.runtime.onStartup.addListener(async () => {
+  await clearStaleRunState();
+  await initializeSidePanel();
+});
 
 async function initializeSidePanel() {
   await setSidePanelBehavior();
   await setGlobalSidePanel();
   refreshAllTabs();
+}
+
+async function clearStaleRunState() {
+  const data = await chrome.storage.local.get('runState').catch(() => ({}));
+  const previous = data.runState || {};
+  if (!previous.running) return;
+
+  await chrome.storage.local.set({
+    runState: {
+      running: false,
+      currentIndex: Number.isInteger(previous.currentIndex) ? previous.currentIndex : 0,
+    },
+  }).catch(() => {});
 }
 
 chrome.action.onClicked.addListener(async (tab) => {
